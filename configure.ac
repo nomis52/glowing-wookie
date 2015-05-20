@@ -10,6 +10,10 @@ AM_INIT_AUTOMAKE([-Wall -Werror subdir-objects foreign])
 AC_LANG_PUSH([C++])
 
 AC_PROG_CXX
+AM_PROG_AR
+
+LT_INIT
+AC_PROG_LIBTOOL
 
 # pkg-config
 PKG_PROG_PKG_CONFIG
