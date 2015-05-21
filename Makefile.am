@@ -46,14 +46,14 @@ endif
 
 # PROGRAMS
 ##################################################
-noinst_PROGRAMS = src/main src/client
+noinst_PROGRAMS = src/master src/client
 
 src_client_SOURCES = src/client.cpp
 src_client_CXXFLAGS = $(OLA_CFLAGS)
 src_client_LDADD = $(OLA_LIBS) \
                  src/libdnssd.la
 
-src_main_SOURCES = src/main.cpp
-src_main_CXXFLAGS = $(OLA_CFLAGS)
-src_main_LDADD = $(OLA_LIBS) \
-                 src/libdnssd.la
+src_master_SOURCES = src/master.cpp
+src_master_CXXFLAGS = $(OLA_CFLAGS)
+src_master_LDADD = $(OLA_LIBS) \
+                   src/libdnssd.la
