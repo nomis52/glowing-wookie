@@ -233,17 +233,16 @@ AvahiWatchEvent AvahiOlaPoll::WatchGetEvents(AvahiWatch *watch) {
   (void) watch;
 }
 
-AvahiTimeout* AvahiOlaPoll::TimeoutNew(
-    const struct timeval *tv,
-    AvahiTimeoutCallback callback,
-    void *userdata) {
+AvahiTimeout* AvahiOlaPoll::TimeoutNew(const struct timeval *tv,
+                                       AvahiTimeoutCallback callback,
+                                       void *userdata) {
   AvahiTimeout *timeout = new AvahiTimeout();
   timeout->poll = this;
   timeout->callback = callback;
   timeout->userdata = userdata;
 
   if (tv) {
-    TimeInterval delay(*tv);
+    TimeInterval delay(tv->tv_sec, tv->tv_usec);
     timeout->id = m_ss->RegisterSingleTimeout(
         delay, NewSingleCallback(ExecuteTimeout, timeout));
   }
@@ -258,7 +257,7 @@ void AvahiOlaPoll::TimeoutFree(AvahiTimeout *timeout) {
 }
 
 void AvahiOlaPoll::TimeoutUpdate(AvahiTimeout *timeout,
-                            const struct timeval *tv) {
+                                 const struct timeval *tv) {
   if (timeout->id != ola::thread::INVALID_TIMEOUT) {
     m_ss->RemoveTimeout(timeout->id);
     timeout->id = ola::thread::INVALID_TIMEOUT;
@@ -267,7 +266,7 @@ void AvahiOlaPoll::TimeoutUpdate(AvahiTimeout *timeout,
     return;
   }
 
-  TimeInterval delay(*tv);
+  TimeInterval delay(tv->tv_sec, tv->tv_usec);
   timeout->id = m_ss->RegisterSingleTimeout(
       delay, NewSingleCallback(ExecuteTimeout, timeout));
 }

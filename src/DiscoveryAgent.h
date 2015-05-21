@@ -44,13 +44,6 @@
  */
 class DiscoveryAgentInterface {
  public:
-  struct Options {
-    Options() {}
-
-    std::string scope;
-    bool watch_masters;
-  };
-
   enum MasterEvent {
     MASTER_ADDED,
     MASTER_REMOVED,
@@ -58,6 +51,13 @@ class DiscoveryAgentInterface {
 
   typedef ola::Callback2<void, MasterEvent, const MasterEntry&>
       MasterEventCallback;
+
+  struct Options {
+    Options() : master_callback(NULL) {}
+
+    std::string scope;
+    MasterEventCallback *master_callback;
+  };
 
   virtual ~DiscoveryAgentInterface() {}
 
@@ -75,27 +75,6 @@ class DiscoveryAgentInterface {
    * Once this returns any threads will have been terminated.
    */
   virtual bool Stop() = 0;
-
-  /**
-   * @brief Change the scope for discovery.
-   *
-   * The scope corresponds to the sub_type in DNS-SD. If the scope is the empty
-   * string, all controllers will be discovered.
-   *
-   * Once this method returns, FindControllers() will only return controllers
-   * in the current scope.
-   */
-  virtual void SetScope(const std::string &scope) = 0;
-
-  /**
-   * @brief Watch for masters.
-   */
-  virtual void WatchMasters(MasterEventCallback *cb) = 0;
-
-  /**
-   * @brief Watch for masters.
-   */
-  virtual void StopWatchingMasters(MasterEventCallback *cb) = 0;
 
   /**
    * @brief Register the SocketAddress as a master.
@@ -131,8 +110,8 @@ class DiscoveryAgentInterface {
 
 /**
  * @brief A Factory which produces implementations of DiscoveryAgentInterface.
- * The exact type of object returns depends on what implementation of DNS-SD was
- * available at build time.
+ * The exact type of object returns depends on what implementation of DNS-SD
+ * was available at build time.
  */
 class DiscoveryAgentFactory {
  public:

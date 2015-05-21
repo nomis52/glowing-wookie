@@ -1,4 +1,5 @@
 
+#include <signal.h>
 #include <ola/Callback.h>
 #include <ola/Logging.h>
 #include <ola/base/Flags.h>
@@ -59,7 +60,9 @@ int main(int argc, char *argv[]) {
   DiscoveryAgentFactory factory;
   DiscoveryAgentInterface::Options options;
   options.scope = FLAGS_scope.str();
-  options.watch_masters = FLAGS_watch_masters;
+  if (FLAGS_watch_masters) {
+    options.master_callback = ola::NewCallback(MasterChanged);
+  }
   std::auto_ptr<DiscoveryAgentInterface> agent(factory.New(options));
 
   if (!agent->Start()) {
@@ -90,11 +93,6 @@ int main(int argc, char *argv[]) {
   master_entry.priority = FLAGS_priority;
   master_entry.scope = FLAGS_scope.str();
   agent->RegisterMaster(master_entry);
-
-  // Setup watch
-  if (FLAGS_watch_masters) {
-    agent->WatchMasters(ola::NewCallback(MasterChanged));
-  }
 
   SelectServer ss;
   g_ss = &ss;

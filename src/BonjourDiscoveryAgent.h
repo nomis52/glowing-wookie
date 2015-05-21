@@ -31,6 +31,7 @@
 #include <ola/thread/Mutex.h>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -42,14 +43,12 @@
  */
 class BonjourDiscoveryAgent : public DiscoveryAgentInterface {
  public:
-  BonjourDiscoveryAgent(const DiscoveryAgentInterface::Options &options);
+  explicit BonjourDiscoveryAgent(const Options &options);
   ~BonjourDiscoveryAgent();
 
   bool Start();
 
   bool Stop();
-
-  void SetScope(const std::string &scope);
 
   void WatchMasters(MasterEventCallback *cb);
 

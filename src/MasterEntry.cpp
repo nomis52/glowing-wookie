@@ -22,7 +22,7 @@
 
 #include <stdint.h>
 #include <ola/network/SocketAddress.h>
-#include <ola/rdm/UID.h>
+#include <ola/strings/Format.h>
 #include <string>
 #include <iostream>
 
@@ -42,4 +42,8 @@ string MasterEntry::ToString() const {
   out << "Controller: '" << service_name << "' @ " << address << ", priority "
       << static_cast<int>(priority) << ", scope " << scope;
   return out.str();
+}
+
+std::string MasterEntry::ServiceName() const {
+  return service_name + "-" + ola::strings::IntToString(priority);
 }

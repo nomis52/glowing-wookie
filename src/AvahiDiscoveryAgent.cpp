@@ -53,31 +53,34 @@ using std::auto_ptr;
 using std::ostringstream;
 using std::string;
 
-// ControllerResolver
+// MasterResolver
 // ----------------------------------------------------------------------------
-class ControllerResolver {
+class MasterResolver {
  public:
-  ControllerResolver(AvahiOlaClient *client,
-                     AvahiIfIndex interface_index,
-                     AvahiProtocol protocol,
-                     const std::string &service_name,
-                     const std::string &type,
-                     const std::string &domain);
+  typedef ola::Callback1<void, const MasterResolver*> ChangeCallback;
 
-  ~ControllerResolver();
+  MasterResolver(ChangeCallback *callback,
+                 AvahiOlaClient *client,
+                 AvahiIfIndex interface_index,
+                 AvahiProtocol protocol,
+                 const std::string &service_name,
+                 const std::string &type,
+                 const std::string &domain);
 
-  bool operator==(const ControllerResolver &other) const;
+  ~MasterResolver();
+
+  bool operator==(const MasterResolver &other) const;
 
   std::string ToString() const;
 
   friend std::ostream& operator<<(std::ostream &out,
-                                  const ControllerResolver &info) {
+                                  const MasterResolver &info) {
     return out << info.ToString();
   }
 
   bool StartResolution();
 
-  bool GetControllerEntry(E133ControllerEntry *entry);
+  bool GetMasterEntry(MasterEntry *entry) const;
 
   void ResolveEvent(AvahiResolverEvent event,
                     const AvahiAddress *a,
@@ -85,6 +88,7 @@ class ControllerResolver {
                     AvahiStringList *txt);
 
  private:
+  std::auto_ptr<ChangeCallback> m_callback;
   AvahiOlaClient *m_client;
   AvahiServiceResolver *m_resolver;
 
@@ -97,9 +101,6 @@ class ControllerResolver {
   uint8_t m_priority;
   ola::network::IPV4SocketAddress m_resolved_address;
   std::string m_scope;
-  ola::rdm::UID m_uid;
-  std::string m_model;
-  std::string m_manufacturer;
 
   bool ExtractString(AvahiStringList *txt_list,
                      const std::string &key,
@@ -113,35 +114,34 @@ class ControllerResolver {
   static const uint8_t DEFAULT_PRIORITY;
 };
 
-const uint8_t ControllerResolver::DEFAULT_PRIORITY = 100;
+const uint8_t MasterResolver::DEFAULT_PRIORITY = 100;
 
-// ControllerRegistration
+// MasterRegistration
 // ----------------------------------------------------------------------------
-class ControllerRegistration : public ClientStateChangeListener {
+class MasterRegistration : public ClientStateChangeListener {
  public:
-  explicit ControllerRegistration(AvahiOlaClient *client);
-  ~ControllerRegistration();
+  explicit MasterRegistration(AvahiOlaClient *client);
+  ~MasterRegistration();
 
   void ClientStateChanged(AvahiClientState state);
 
-  void RegisterOrUpdate(const E133ControllerEntry &controller);
+  void RegisterOrUpdate(const MasterEntry &master);
 
   void GroupEvent(AvahiEntryGroupState state);
 
  private:
   AvahiOlaClient *m_client;
-  E133ControllerEntry m_controller_entry;
+  MasterEntry m_master_entry;
   AvahiEntryGroup *m_entry_group;
 
   void PerformRegistration();
   bool AddGroupEntry(AvahiEntryGroup *group);
-  void UpdateRegistration(const E133ControllerEntry &new_controller);
+  void UpdateRegistration(const MasterEntry &new_master);
   void CancelRegistration();
-  void ChooseAlternateServiceName();
 
-  AvahiStringList *BuildTxtRecord(const E133ControllerEntry &controller);
+  AvahiStringList *BuildTxtRecord(const MasterEntry &master);
 
-  DISALLOW_COPY_AND_ASSIGN(ControllerRegistration);
+  DISALLOW_COPY_AND_ASSIGN(MasterRegistration);
 };
 
 // static callback functions
@@ -178,8 +178,8 @@ static void resolve_callback(AvahiServiceResolver *r,
                              AvahiStringList *txt,
                              AvahiLookupResultFlags flags,
                              void *userdata) {
-  ControllerResolver *resolver =
-    reinterpret_cast<ControllerResolver*>(userdata);
+  MasterResolver *resolver =
+    reinterpret_cast<MasterResolver*>(userdata);
   resolver->ResolveEvent(event, a, port, txt);
 
   (void) r;
@@ -195,40 +195,41 @@ static void resolve_callback(AvahiServiceResolver *r,
 static void entry_group_callback(AvahiEntryGroup *group,
                                  AvahiEntryGroupState state,
                                  void *data) {
-  ControllerRegistration *controller_registration =
-      reinterpret_cast<ControllerRegistration*>(data);
-  controller_registration->GroupEvent(state);
+  MasterRegistration *master_registration =
+      reinterpret_cast<MasterRegistration*>(data);
+  master_registration->GroupEvent(state);
   (void) group;
 }
 }  // namespace
 
-// ControllerResolver
+// MasterResolver
 // ----------------------------------------------------------------------------
-ControllerResolver::ControllerResolver(AvahiOlaClient *client,
-                                       AvahiIfIndex interface_index,
-                                       AvahiProtocol protocol,
-                                       const std::string &service_name,
-                                       const std::string &type,
-                                       const std::string &domain)
-    : m_client(client),
+MasterResolver::MasterResolver(ChangeCallback *callback,
+                               AvahiOlaClient *client,
+                               AvahiIfIndex interface_index,
+                               AvahiProtocol protocol,
+                               const std::string &service_name,
+                               const std::string &type,
+                               const std::string &domain)
+    : m_callback(callback),
+      m_client(client),
       m_resolver(NULL),
       m_interface_index(interface_index),
       m_protocol(protocol),
       m_service_name(service_name),
       m_type(type),
-      m_domain(domain),
-      m_uid(0, 0) {
+      m_domain(domain) {
 }
 
 
-ControllerResolver::~ControllerResolver() {
+MasterResolver::~MasterResolver() {
   if (m_resolver) {
     avahi_service_resolver_free(m_resolver);
     m_resolver = NULL;
   }
 }
 
-bool ControllerResolver::operator==(const ControllerResolver &other) const {
+bool MasterResolver::operator==(const MasterResolver &other) const {
   return (m_interface_index == other.m_interface_index &&
           m_protocol == other.m_protocol &&
           m_service_name == other.m_service_name &&
@@ -236,14 +237,14 @@ bool ControllerResolver::operator==(const ControllerResolver &other) const {
           m_domain == other.m_domain);
 }
 
-string ControllerResolver::ToString() const {
+string MasterResolver::ToString() const {
   std::ostringstream str;
   str << m_service_name << "." << m_type << m_domain << " on iface "
       << m_interface_index;
   return str.str();
 }
 
-bool ControllerResolver::StartResolution() {
+bool MasterResolver::StartResolution() {
   if (m_resolver) {
     return true;
   }
@@ -260,25 +261,18 @@ bool ControllerResolver::StartResolution() {
   return true;
 }
 
-bool ControllerResolver::GetControllerEntry(E133ControllerEntry *entry) {
-  if (m_resolved_address.Host().IsWildcard()) {
-    return false;
-  }
-
+bool MasterResolver::GetMasterEntry(MasterEntry *entry) const {
   entry->service_name = m_service_name;
   entry->priority = m_priority;
   entry->scope = m_scope;
-  entry->uid = m_uid;
-  entry->model = m_model;
-  entry->manufacturer = m_manufacturer;
   entry->address = m_resolved_address;
   return true;
 }
 
-void ControllerResolver::ResolveEvent(AvahiResolverEvent event,
-                                      const AvahiAddress *address,
-                                      uint16_t port,
-                                      AvahiStringList *txt) {
+void MasterResolver::ResolveEvent(AvahiResolverEvent event,
+                                  const AvahiAddress *address,
+                                  uint16_t port,
+                                  AvahiStringList *txt) {
   if (event == AVAHI_RESOLVER_FAILURE) {
     OLA_WARN << "Failed to resolve " << m_service_name << "." << m_type
              << ", proto: " << ProtoToString(m_protocol);
@@ -295,12 +289,6 @@ void ControllerResolver::ResolveEvent(AvahiResolverEvent event,
     return;
   }
 
-  if (!CheckVersionMatches(txt,
-                           DiscoveryAgentInterface::E133_VERSION_KEY,
-                           DiscoveryAgentInterface::E133_VERSION)) {
-    return;
-  }
-
   unsigned int priority;
   if (!ExtractInt(txt, DiscoveryAgentInterface::PRIORITY_KEY, &priority)) {
     return;
@@ -310,25 +298,15 @@ void ControllerResolver::ResolveEvent(AvahiResolverEvent event,
     return;
   }
 
-  // These are optional?
-  string uid_str;
-  if (ExtractString(txt, DiscoveryAgentInterface::UID_KEY, &uid_str)) {
-    auto_ptr<ola::rdm::UID> uid(ola::rdm::UID::FromString(uid_str));
-    if (uid.get()) {
-      m_uid = *uid;
-    }
-  }
-
-  ExtractString(txt, DiscoveryAgentInterface::MODEL_KEY, &m_model);
-  ExtractString(txt, DiscoveryAgentInterface::MANUFACTURER_KEY,
-                &m_manufacturer);
-
   m_priority = static_cast<uint8_t>(priority);
   m_resolved_address = IPV4SocketAddress(
       IPV4Address(address->data.ipv4.address), port);
+  if (m_callback.get()) {
+    m_callback->Run(this);
+  }
 }
 
-bool ControllerResolver::ExtractString(AvahiStringList *txt_list,
+bool MasterResolver::ExtractString(AvahiStringList *txt_list,
                                            const std::string &key,
                                            std::string *dest) {
   AvahiStringList *entry = avahi_string_list_find(txt_list, key.c_str());
@@ -358,7 +336,7 @@ bool ControllerResolver::ExtractString(AvahiStringList *txt_list,
 }
 
 
-bool ControllerResolver::ExtractInt(AvahiStringList *txt_list,
+bool MasterResolver::ExtractInt(AvahiStringList *txt_list,
                                         const std::string &key,
                                         unsigned int *dest) {
   string value;
@@ -373,7 +351,7 @@ bool ControllerResolver::ExtractInt(AvahiStringList *txt_list,
   return true;
 }
 
-bool ControllerResolver::CheckVersionMatches(
+bool MasterResolver::CheckVersionMatches(
     AvahiStringList *txt_list,
     const string &key, unsigned int expected_version) {
   unsigned int version;
@@ -389,20 +367,20 @@ bool ControllerResolver::CheckVersionMatches(
   return true;
 }
 
-// ControllerRegistration
+// MasterRegistration
 // ----------------------------------------------------------------------------
-ControllerRegistration::ControllerRegistration(AvahiOlaClient *client)
+MasterRegistration::MasterRegistration(AvahiOlaClient *client)
     : m_client(client),
       m_entry_group(NULL) {
   m_client->AddStateChangeListener(this);
 }
 
-ControllerRegistration::~ControllerRegistration() {
+MasterRegistration::~MasterRegistration() {
   CancelRegistration();
   m_client->RemoveStateChangeListener(this);
 }
 
-void ControllerRegistration::ClientStateChanged(AvahiClientState state) {
+void MasterRegistration::ClientStateChanged(AvahiClientState state) {
   switch (state) {
     case AVAHI_CLIENT_S_RUNNING:
       PerformRegistration();
@@ -412,36 +390,35 @@ void ControllerRegistration::ClientStateChanged(AvahiClientState state) {
   }
 }
 
-void ControllerRegistration::RegisterOrUpdate(
-    const E133ControllerEntry &controller) {
-  if (m_controller_entry == controller) {
+void MasterRegistration::RegisterOrUpdate(const MasterEntry &master) {
+  if (m_master_entry == master) {
     // No change.
     return;
   }
 
   if (m_client->GetState() != AVAHI_CLIENT_S_RUNNING) {
-    // Store the controller info until we change to running.
-    m_controller_entry = controller;
+    // Store the master info until we change to running.
+    m_master_entry = master;
     return;
   }
 
   if (m_entry_group) {
-    OLA_INFO << "Updating controller registration for " << controller.address;
-    UpdateRegistration(controller);
+    OLA_INFO << "Updating master registration for " << master.address;
+    UpdateRegistration(master);
   } else {
-    m_controller_entry = controller;
+    m_master_entry = master;
     PerformRegistration();
   }
 }
 
-void ControllerRegistration::GroupEvent(AvahiEntryGroupState state) {
+void MasterRegistration::GroupEvent(AvahiEntryGroupState state) {
+  OLA_INFO << GroupStateToString(state);
   if (state == AVAHI_ENTRY_GROUP_COLLISION) {
-    ChooseAlternateServiceName();
-    PerformRegistration();
+    OLA_INFO << "Name collision";
   }
 }
 
-void ControllerRegistration::PerformRegistration() {
+void MasterRegistration::PerformRegistration() {
   AvahiEntryGroup *group = NULL;
   if (m_entry_group) {
     group = m_entry_group;
@@ -462,43 +439,43 @@ void ControllerRegistration::PerformRegistration() {
   }
 }
 
-bool ControllerRegistration::AddGroupEntry(AvahiEntryGroup *group) {
-  AvahiStringList *txt_str_list = BuildTxtRecord(m_controller_entry);
+bool MasterRegistration::AddGroupEntry(AvahiEntryGroup *group) {
+  AvahiStringList *txt_str_list = BuildTxtRecord(m_master_entry);
 
+  OLA_INFO << "Going to register: " << m_master_entry.ServiceName();
   int ret = avahi_entry_group_add_service_strlst(
       group, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
       static_cast<AvahiPublishFlags>(0),
-      m_controller_entry.ServiceName().c_str(),
-      DiscoveryAgentInterface::E133_CONTROLLER_SERVICE,
-      NULL, NULL, m_controller_entry.address.Port(), txt_str_list);
+      m_master_entry.ServiceName().c_str(),
+      DiscoveryAgentInterface::MASTER_SERVICE,
+      NULL, NULL, m_master_entry.address.Port(), txt_str_list);
 
   avahi_string_list_free(txt_str_list);
 
   if (ret < 0) {
     if (ret == AVAHI_ERR_COLLISION) {
-      ChooseAlternateServiceName();
-      PerformRegistration();
+      OLA_INFO << "Name collision";
     } else {
-      OLA_WARN << "Failed to add " << m_controller_entry << " : "
+      OLA_WARN << "Failed to add " << m_master_entry << " : "
                << avahi_strerror(ret);
     }
     return false;
   }
 
-  if (!m_controller_entry.scope.empty()) {
+  if (!m_master_entry.scope.empty()) {
     ostringstream sub_type;
-    sub_type << "_" << m_controller_entry.scope << "._sub."
-             << DiscoveryAgentInterface::E133_CONTROLLER_SERVICE;
+    sub_type << "_" << m_master_entry.scope << "._sub."
+             << DiscoveryAgentInterface::MASTER_SERVICE;
 
     ret = avahi_entry_group_add_service_subtype(
         group, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
         static_cast<AvahiPublishFlags>(0),
-        m_controller_entry.ServiceName().c_str(),
-        DiscoveryAgentInterface::E133_CONTROLLER_SERVICE,
+        m_master_entry.ServiceName().c_str(),
+        DiscoveryAgentInterface::MASTER_SERVICE,
         NULL, sub_type.str().c_str());
 
     if (ret < 0) {
-      OLA_WARN << "Failed to add subtype for " << m_controller_entry << " : "
+      OLA_WARN << "Failed to add subtype for " << m_master_entry << " : "
                << avahi_strerror(ret);
       return false;
     }
@@ -506,48 +483,48 @@ bool ControllerRegistration::AddGroupEntry(AvahiEntryGroup *group) {
 
   ret = avahi_entry_group_commit(group);
   if (ret < 0) {
-    OLA_WARN << "Failed to commit controller " << m_controller_entry << " : "
+    OLA_WARN << "Failed to commit master " << m_master_entry << " : "
              << avahi_strerror(ret);
   }
   return ret == 0;
 }
 
-void ControllerRegistration::UpdateRegistration(
-    const E133ControllerEntry &new_controller) {
-  if (new_controller == m_controller_entry) {
+void MasterRegistration::UpdateRegistration(
+    const MasterEntry &new_master) {
+  if (new_master == m_master_entry) {
     return;
   }
 
-  if (new_controller.scope != m_controller_entry.scope) {
+  if (new_master.scope != m_master_entry.scope) {
     // We require a full reset.
     avahi_entry_group_reset(m_entry_group);
-    m_controller_entry.UpdateFrom(new_controller);
+    m_master_entry.UpdateFrom(new_master);
     PerformRegistration();
     return;
   }
 
-  m_controller_entry.UpdateFrom(new_controller);
+  m_master_entry.UpdateFrom(new_master);
 
-  AvahiStringList *txt_str_list = BuildTxtRecord(m_controller_entry);
+  AvahiStringList *txt_str_list = BuildTxtRecord(m_master_entry);
 
   OLA_INFO << "updating  " << m_entry_group << " : " <<
-    m_controller_entry.ServiceName();
+    m_master_entry.ServiceName();
   int ret = avahi_entry_group_update_service_txt_strlst(
       m_entry_group, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
       static_cast<AvahiPublishFlags>(0),
-      m_controller_entry.ServiceName().c_str(),
-      DiscoveryAgentInterface::E133_CONTROLLER_SERVICE,
+      m_master_entry.ServiceName().c_str(),
+      DiscoveryAgentInterface::MASTER_SERVICE,
       NULL, txt_str_list);
 
   avahi_string_list_free(txt_str_list);
 
   if (ret < 0) {
-    OLA_WARN << "Failed to update controller " << m_controller_entry << ": "
+    OLA_WARN << "Failed to update master " << m_master_entry << ": "
              << avahi_strerror(ret);
   }
 }
 
-void ControllerRegistration::CancelRegistration() {
+void MasterRegistration::CancelRegistration() {
   if (!m_entry_group) {
     return;
   }
@@ -555,17 +532,8 @@ void ControllerRegistration::CancelRegistration() {
   m_entry_group = NULL;
 }
 
-void ControllerRegistration::ChooseAlternateServiceName() {
-  char *new_name = avahi_alternative_service_name(
-    m_controller_entry.ServiceName().c_str());
-  OLA_INFO << "Renamed " << m_controller_entry.ServiceName() << " to "
-           << new_name;
-  m_controller_entry.SetServiceName(new_name);
-  avahi_free(new_name);
-}
-
-AvahiStringList *ControllerRegistration::BuildTxtRecord(
-    const E133ControllerEntry &controller) {
+AvahiStringList *MasterRegistration::BuildTxtRecord(
+    const MasterEntry &master) {
   AvahiStringList *txt_str_list = NULL;
   txt_str_list = avahi_string_list_add_printf(
       txt_str_list, "%s=%d",
@@ -575,48 +543,22 @@ AvahiStringList *ControllerRegistration::BuildTxtRecord(
   txt_str_list = avahi_string_list_add_printf(
       txt_str_list, "%s=%d",
       DiscoveryAgentInterface::PRIORITY_KEY,
-      controller.priority);
+      master.priority);
 
   txt_str_list = avahi_string_list_add_printf(
       txt_str_list, "%s=%s",
       DiscoveryAgentInterface::SCOPE_KEY,
-      controller.scope.c_str());
-
-  txt_str_list = avahi_string_list_add_printf(
-      txt_str_list, "%s=%d",
-      DiscoveryAgentInterface::E133_VERSION_KEY,
-      controller.e133_version);
-
-  if (controller.uid.ManufacturerId() != 0 && controller.uid.DeviceId() != 0) {
-    txt_str_list = avahi_string_list_add_printf(
-        txt_str_list, "%s=%s",
-        DiscoveryAgentInterface::UID_KEY,
-        controller.uid.ToString().c_str());
-  }
-
-  if (!controller.model.empty()) {
-    txt_str_list = avahi_string_list_add_printf(
-        txt_str_list, "%s=%s",
-        DiscoveryAgentInterface::MODEL_KEY,
-        controller.model.c_str());
-  }
-
-  if (!controller.manufacturer.empty()) {
-    txt_str_list = avahi_string_list_add_printf(
-        txt_str_list, "%s=%s",
-        DiscoveryAgentInterface::MANUFACTURER_KEY,
-        controller.manufacturer.c_str());
-  }
+      master.scope.c_str());
 
   return txt_str_list;
 }
 
 // AvahiDiscoveryAgent
 // ----------------------------------------------------------------------------
-AvahiDiscoveryAgent::AvahiDiscoveryAgent()
-    : m_controller_browser(NULL),
-      m_scope(DEFAULT_SCOPE),
-      m_changing_scope(false) {
+AvahiDiscoveryAgent::AvahiDiscoveryAgent(const Options &options)
+    : m_scope(options.scope),
+      m_master_callback(options.master_callback),
+      m_master_browser(NULL) {
 }
 
 AvahiDiscoveryAgent::~AvahiDiscoveryAgent() {
@@ -638,72 +580,33 @@ bool AvahiDiscoveryAgent::Stop() {
     m_thread->Join();
     m_thread.reset();
   }
-
   return true;
 }
 
-void AvahiDiscoveryAgent::SetScope(const std::string &scope) {
-  // We need to ensure that FindControllers only returns controllers in the new
-  // scope. So we empty the list here and trigger a scope change in the DNS-SD
-  // thread.
-  MutexLocker lock(&m_controllers_mu);
-  if (m_scope == scope) {
-    return;
-  }
-
-  m_orphaned_controllers.reserve(
-      m_orphaned_controllers.size() + m_controllers.size());
-  copy(m_controllers.begin(), m_controllers.end(),
-       back_inserter(m_orphaned_controllers));
-  m_controllers.clear();
-  m_scope = scope;
-  m_changing_scope = true;
-
+void AvahiDiscoveryAgent::RegisterMaster(const MasterEntry &master) {
   m_ss.Execute(ola::NewSingleCallback(
       this,
-      &AvahiDiscoveryAgent::TriggerScopeChange));
+      &AvahiDiscoveryAgent::InternalRegisterService, master));
 }
 
-void AvahiDiscoveryAgent::FindControllers(
-    ControllerEntryList *controllers) {
-  MutexLocker lock(&m_controllers_mu);
-
-  ControllerResolverList::iterator iter = m_controllers.begin();
-  for (; iter != m_controllers.end(); ++iter) {
-    E133ControllerEntry entry;
-    if ((*iter)->GetControllerEntry(&entry)) {
-      if (entry.scope != m_scope) {
-        OLA_WARN << "Mismatched scope for " << entry;
-      } else {
-        controllers->push_back(entry);
-      }
-    }
-  }
-}
-
-void AvahiDiscoveryAgent::RegisterController(
-    const E133ControllerEntry &controller) {
-  m_ss.Execute(ola::NewSingleCallback(
-      this,
-      &AvahiDiscoveryAgent::InternalRegisterService, controller));
-}
-
-void AvahiDiscoveryAgent::DeRegisterController(
-      const ola::network::IPV4SocketAddress &controller_address) {
+void AvahiDiscoveryAgent::DeRegisterMaster(
+      const ola::network::IPV4SocketAddress &master_address) {
   m_ss.Execute(ola::NewSingleCallback(
       this, &AvahiDiscoveryAgent::InternalDeRegisterService,
-      controller_address));
+      master_address));
 }
 
 void AvahiDiscoveryAgent::ClientStateChanged(AvahiClientState state) {
   if (state == AVAHI_CLIENT_S_RUNNING) {
-    // The server has started successfully and registered its host
-    // name on the network, so we can start locating the controllers.
-    StartServiceBrowser();
+    if (m_master_callback.get()) {
+      // The server has started successfully and registered its host
+      // name on the network, so we can start locating the masters.
+      StartServiceBrowser();
+    }
     return;
   }
 
-  MutexLocker lock(&m_controllers_mu);
+  MutexLocker lock(&m_masters_mu);
   StopResolution();
 }
 
@@ -719,7 +622,7 @@ void AvahiDiscoveryAgent::RunThread(ola::thread::Future<void> *future) {
   m_client->RemoveStateChangeListener(this);
 
   {
-    MutexLocker lock(&m_controllers_mu);
+    MutexLocker lock(&m_masters_mu);
     StopResolution();
   }
 
@@ -742,10 +645,10 @@ void AvahiDiscoveryAgent::BrowseEvent(AvahiIfIndex interface,
       OLA_WARN << "(Browser) " << m_client->GetLastError();
       return;
     case AVAHI_BROWSER_NEW:
-      AddController(interface, protocol, name, type, domain);
+      AddMaster(interface, protocol, name, type, domain);
       break;
     case AVAHI_BROWSER_REMOVE:
-      RemoveController(interface, protocol, name, type, domain);
+      RemoveMaster(interface, protocol, name, type, domain);
       break;
     default:
       {}
@@ -753,20 +656,26 @@ void AvahiDiscoveryAgent::BrowseEvent(AvahiIfIndex interface,
   (void) flags;
 }
 
+void AvahiDiscoveryAgent::MasterChanged(const MasterResolver *resolver) {
+  MasterEntry entry;
+  resolver->GetMasterEntry(&entry);
+  m_master_callback->Run(MASTER_ADDED, entry);
+}
+
 void AvahiDiscoveryAgent::StartServiceBrowser() {
   ostringstream service;
   {
-    MutexLocker lock(&m_controllers_mu);
+    MutexLocker lock(&m_masters_mu);
     service << "_" << m_scope;
   }
-  service << "._sub." << E133_CONTROLLER_SERVICE;
+  service << "._sub." << MASTER_SERVICE;
 
-  m_controller_browser = m_client->CreateServiceBrowser(
+  m_master_browser = m_client->CreateServiceBrowser(
       AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
       service.str().c_str(), NULL,
       static_cast<AvahiLookupFlags>(0), browse_callback, this);
-  if (!m_controller_browser) {
-    OLA_WARN << "Failed to start browsing for " << E133_CONTROLLER_SERVICE
+  if (!m_master_browser) {
+    OLA_WARN << "Failed to start browsing for " << MASTER_SERVICE
              << ": " << m_client->GetLastError();
   }
   OLA_INFO << "Started browsing for " << service.str();
@@ -774,95 +683,82 @@ void AvahiDiscoveryAgent::StartServiceBrowser() {
 
 void AvahiDiscoveryAgent::StopResolution() {
   // Tear down the existing resolution
-  ola::STLDeleteElements(&m_controllers);
-  ola::STLDeleteElements(&m_orphaned_controllers);
+  ola::STLDeleteElements(&m_masters);
 
-  if (m_controller_browser) {
-    avahi_service_browser_free(m_controller_browser);
-    m_controller_browser = NULL;
+  if (m_master_browser) {
+    avahi_service_browser_free(m_master_browser);
+    m_master_browser = NULL;
   }
 }
 
-void AvahiDiscoveryAgent::TriggerScopeChange() {
-  {
-    MutexLocker lock(&m_controllers_mu);
-    StopResolution();
-    m_changing_scope = false;
-  }
-  StartServiceBrowser();
-}
-
-void AvahiDiscoveryAgent::AddController(AvahiIfIndex interface,
-                                            AvahiProtocol protocol,
-                                            const std::string &name,
-                                            const std::string &type,
-                                            const std::string &domain) {
+void AvahiDiscoveryAgent::AddMaster(AvahiIfIndex interface,
+                                    AvahiProtocol protocol,
+                                    const std::string &name,
+                                    const std::string &type,
+                                    const std::string &domain) {
   OLA_INFO << "(Browser) NEW: service " << name << " of type " << type
            << " in domain " << domain << ", iface" << interface
            << ", proto " << protocol;
 
-  MutexLocker lock(&m_controllers_mu);
-  if (m_changing_scope) {
-    // We're in the middle of changing scopes so don't change m_controllers.
-    return;
-  }
+  MutexLocker lock(&m_masters_mu);
 
-  auto_ptr<ControllerResolver> controller(new ControllerResolver(
+  auto_ptr<MasterResolver> master(new MasterResolver(
+      NewCallback(this, &AvahiDiscoveryAgent::MasterChanged),
       m_client.get(), interface, protocol, name, type, domain));
 
-  // We get the callback multiple times for the same
-  ControllerResolverList::iterator iter = m_controllers.begin();
-  for (; iter != m_controllers.end(); ++iter) {
-    if ((**iter) == *controller) {
+  // We get the callback multiple times for the same instance
+  MasterResolverList::iterator iter = m_masters.begin();
+  for (; iter != m_masters.end(); ++iter) {
+    if ((**iter) == *master) {
       return;
     }
   }
-  if (controller->StartResolution()) {
-    m_controllers.push_back(controller.release());
+  if (master->StartResolution()) {
+    MasterEntry entry;
+    master->GetMasterEntry(&entry);
+    m_masters.push_back(master.release());
+    m_master_callback->Run(MASTER_ADDED, entry);
   }
 }
 
-void AvahiDiscoveryAgent::RemoveController(AvahiIfIndex interface,
-                                               AvahiProtocol protocol,
-                                               const std::string &name,
-                                               const std::string &type,
-                                               const std::string &domain) {
-  ControllerResolver controller(m_client.get(), interface, protocol, name,
-                                type, domain);
-  OLA_WARN << "Removing: " << controller;
+void AvahiDiscoveryAgent::RemoveMaster(AvahiIfIndex interface,
+                                       AvahiProtocol protocol,
+                                       const std::string &name,
+                                       const std::string &type,
+                                       const std::string &domain) {
+  MasterResolver master(NULL, m_client.get(), interface, protocol, name, type,
+                        domain);
+  OLA_WARN << "Removing: " << master;
 
-  MutexLocker lock(&m_controllers_mu);
+  MutexLocker lock(&m_masters_mu);
 
-  if (m_changing_scope) {
-    // We're in the middle of changing scopes so don't change m_controllers.
-    return;
-  }
-
-  ControllerResolverList::iterator iter = m_controllers.begin();
-  for (; iter != m_controllers.end(); ++iter) {
-    if (**iter == controller) {
+  MasterResolverList::iterator iter = m_masters.begin();
+  for (; iter != m_masters.end(); ++iter) {
+    if (**iter == master) {
+      MasterEntry entry;
+      (*iter)->GetMasterEntry(&entry);
+      m_master_callback->Run(MASTER_REMOVED, entry);
       delete *iter;
-      m_controllers.erase(iter);
+      m_masters.erase(iter);
       return;
     }
   }
-  OLA_INFO << "Failed to find " << controller;
+  OLA_INFO << "Failed to find " << master;
 }
 
-void AvahiDiscoveryAgent::InternalRegisterService(
-    E133ControllerEntry controller) {
-  std::pair<ControllerRegistrationList::iterator, bool> p =
+void AvahiDiscoveryAgent::InternalRegisterService(MasterEntry master) {
+  std::pair<MasterRegistrationList::iterator, bool> p =
       m_registrations.insert(
-          ControllerRegistrationList::value_type(controller.address, NULL));
+          MasterRegistrationList::value_type(master.address, NULL));
 
   if (p.first->second == NULL) {
-    p.first->second = new ControllerRegistration(m_client.get());
+    p.first->second = new MasterRegistration(m_client.get());
   }
-  ControllerRegistration *registration = p.first->second;
-  registration->RegisterOrUpdate(controller);
+  MasterRegistration *registration = p.first->second;
+  registration->RegisterOrUpdate(master);
 }
 
 void AvahiDiscoveryAgent::InternalDeRegisterService(
-      ola::network::IPV4SocketAddress controller_address) {
-  ola::STLRemoveAndDelete(&m_registrations, controller_address);
+      ola::network::IPV4SocketAddress master_address) {
+  ola::STLRemoveAndDelete(&m_registrations, master_address);
 }

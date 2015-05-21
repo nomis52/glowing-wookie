@@ -59,6 +59,8 @@ class MasterEntry {
 
   std::string ToString() const;
 
+  std::string ServiceName() const;
+
   friend std::ostream& operator<<(std::ostream &out,
                                   const MasterEntry &entry) {
     return out << entry.ToString();

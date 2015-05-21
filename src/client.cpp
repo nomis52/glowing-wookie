@@ -1,4 +1,5 @@
 
+#include <signal.h>
 #include <ola/Callback.h>
 #include <ola/Logging.h>
 #include <ola/base/Flags.h>
@@ -7,6 +8,7 @@
 #include <ola/io/SelectServer.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "DiscoveryAgent.h"
@@ -30,14 +32,13 @@ class Client {
     DiscoveryAgentFactory factory;
     DiscoveryAgentInterface::Options options;
     options.scope = FLAGS_scope.str();
-    options.watch_masters = true;
+    options.master_callback = ola::NewCallback(this, &Client::MasterChanged);
     auto_ptr<DiscoveryAgentInterface> agent(factory.New(options));
 
     if (!agent->Start()) {
       return false;
     }
 
-    agent->WatchMasters(ola::NewCallback(this, &Client::MasterChanged));
     m_discovery_agent.reset(agent.release());
     return true;
   }
@@ -65,8 +66,12 @@ class Client {
         priority = iter->priority;
       }
     }
-    OLA_INFO << "Would have picked " << preferred_master->name << " @ "
-             << preferred_master->address;
+    if (preferred_master) {
+      OLA_INFO << "Would have picked " << preferred_master->name << " @ "
+               << preferred_master->address;
+    } else {
+      OLA_INFO << "No master found";
+    }
   }
 
  private:

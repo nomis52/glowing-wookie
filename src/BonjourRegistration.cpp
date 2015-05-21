@@ -170,13 +170,11 @@ string BonjourRegistration::BuildTxtString(const vector<string> &records) {
 }
 
 bool MasterRegistration::RegisterOrUpdate(const MasterEntry &master) {
-  string service_name = (master.service_name + "-" +
-                         ola::strings::IntToString(master.priority));
   OLA_INFO << "Master name is " << service_name;
   return RegisterOrUpdateInternal(
       DiscoveryAgentInterface::MASTER_SERVICE,
       master.scope,
-      service_name,
+      master.ServiceName(),
       master.address,
       BuildTxtRecord(master));
 }
