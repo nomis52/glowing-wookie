@@ -50,6 +50,7 @@ static void ResolveServiceCallback(OLA_UNUSED DNSServiceRef sdRef,
                                    uint16_t txt_length,
                                    const unsigned char *txt_data,
                                    void *context) {
+  OLA_INFO << "ResolveServiceCallback";
   BonjourResolver *resolver = reinterpret_cast<BonjourResolver*>(context);
   resolver->ResolveHandler(
       errorCode, hosttarget, NetworkToHost(port), txt_length, txt_data);
@@ -63,6 +64,9 @@ static void ResolveAddressCallback(OLA_UNUSED DNSServiceRef sdRef,
                                    OLA_UNUSED const struct sockaddr *address,
                                    OLA_UNUSED uint32_t ttl,
                                    void *context) {
+  OLA_INFO << "ResolveAddressCallback, hostname: " << hostname
+           << ", flags: " << flags << ", errorCode: " << errorCode
+           << ", ttl:" << ttl;
   BonjourResolver *resolver = reinterpret_cast<BonjourResolver*>(context);
 
   if (address->sa_family != AF_INET) {
@@ -71,9 +75,13 @@ static void ResolveAddressCallback(OLA_UNUSED DNSServiceRef sdRef,
     return;
   }
 
-  const struct sockaddr_in *v4_addr =
-      reinterpret_cast<const struct sockaddr_in*>(address);
-  resolver->UpdateAddress(IPV4Address(v4_addr->sin_addr.s_addr));
+  IPV4Address new_address;
+  if (flags & kDNSServiceFlagsAdd) {
+    const struct sockaddr_in *v4_addr =
+        reinterpret_cast<const struct sockaddr_in*>(address);
+    new_address = IPV4Address(v4_addr->sin_addr.s_addr);
+  }
+  resolver->UpdateAddress(new_address);
 }
 
 BonjourResolver::BonjourResolver(
@@ -187,6 +195,7 @@ void BonjourResolver::ResolveHandler(
 
 void BonjourResolver::UpdateAddress(
     const ola::network::IPV4Address &v4_address) {
+  OLA_INFO << "Resolved address for " << service_name << " is " << v4_address;
   m_resolved_address.Host(v4_address);
   RunCallback();
 }

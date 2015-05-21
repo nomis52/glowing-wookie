@@ -207,9 +207,10 @@ class Client {
     OLA_INFO << "Close connection to " << master->name << " "
              << master->address;
     if (master->socket) {
-      m_ss.AddReadDescriptor(master->socket);
+      m_ss.RemoveReadDescriptor(master->socket);
       master->socket->Close();
       delete master->socket;
+      master->socket = NULL;
     }
 
     if (master->address != IPV4SocketAddress()) {

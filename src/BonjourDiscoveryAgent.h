@@ -50,10 +50,6 @@ class BonjourDiscoveryAgent : public DiscoveryAgentInterface {
 
   bool Stop();
 
-  void WatchMasters(MasterEventCallback *cb);
-
-  void StopWatchingMasters(MasterEventCallback *cb);
-
   void RegisterMaster(const MasterEntry &master);
 
   void DeRegisterMaster(
@@ -76,9 +72,8 @@ class BonjourDiscoveryAgent : public DiscoveryAgentInterface {
   typedef std::map<ola::network::IPV4SocketAddress,
                    class MasterRegistration*> MasterRegistrationList;
 
-  typedef std::set<MasterEventCallback*> MasterCallbacks;
-
   ola::io::SelectServer m_ss;
+  std::auto_ptr<MasterEventCallback> m_master_callback;
   std::auto_ptr<ola::thread::CallbackThread> m_thread;
   std::auto_ptr<class BonjourIOAdapter> m_io_adapter;
 
@@ -88,7 +83,6 @@ class BonjourDiscoveryAgent : public DiscoveryAgentInterface {
   // These are all protected by m_mutex
   MasterResolverList m_masters;
   MasterResolverList m_orphaned_masters;
-  MasterCallbacks m_master_callbacks;
 
   std::string m_scope;
   bool m_watch_masters;

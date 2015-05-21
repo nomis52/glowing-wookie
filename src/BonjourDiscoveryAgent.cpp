@@ -58,6 +58,7 @@ static void BrowseServiceCallback(DNSServiceRef service,
   BonjourDiscoveryAgent *agent =
       reinterpret_cast<BonjourDiscoveryAgent*>(context);
 
+  OLA_INFO << "Browse event!";
   if (error_code != kDNSServiceErr_NoError) {
     OLA_WARN << "DNSServiceBrowse returned error " << error_code;
     return;
@@ -71,10 +72,10 @@ static void BrowseServiceCallback(DNSServiceRef service,
 // ----------------------------------------------------------------------------
 BonjourDiscoveryAgent::BonjourDiscoveryAgent(
     const DiscoveryAgentInterface::Options &options)
-    : m_io_adapter(new BonjourIOAdapter(&m_ss)),
+    : m_master_callback(options.master_callback),
+      m_io_adapter(new BonjourIOAdapter(&m_ss)),
       m_master_service_ref(NULL),
       m_scope(options.scope),
-      m_watch_masters(options.watch_masters),
       m_changing_scope(false) {
 }
 
@@ -109,40 +110,6 @@ bool BonjourDiscoveryAgent::Stop() {
   return true;
 }
 
-void BonjourDiscoveryAgent::SetScope(const std::string &scope) {
-  // We need to ensure that FindMasters only returns masters in the new
-  // scope. So we empty the list here and trigger a scope change in the DNS-SD
-  // thread.
-  MutexLocker lock(&m_mutex);
-  if (m_scope == scope) {
-    return;
-  }
-
-  m_orphaned_masters.reserve(
-      m_orphaned_masters.size() + m_masters.size());
-  copy(m_masters.begin(), m_masters.end(),
-       back_inserter(m_orphaned_masters));
-  m_masters.clear();
-
-  m_scope = scope;
-  m_changing_scope = true;
-
-  m_ss.Execute(ola::NewSingleCallback(
-      this,
-      &BonjourDiscoveryAgent::TriggerScopeChange,
-      reinterpret_cast<ola::thread::Future<bool>*>(NULL)));
-}
-
-void BonjourDiscoveryAgent::WatchMasters(MasterEventCallback *cb) {
-  MutexLocker lock(&m_mutex);
-  m_master_callbacks.insert(cb);
-}
-
-void BonjourDiscoveryAgent::StopWatchingMasters(MasterEventCallback *cb) {
-  MutexLocker lock(&m_mutex);
-  m_master_callbacks.erase(cb);
-}
-
 void BonjourDiscoveryAgent::RegisterMaster(
     const MasterEntry &master) {
   m_ss.Execute(ola::NewSingleCallback(
@@ -174,7 +141,6 @@ void BonjourDiscoveryAgent::BrowseResult(DNSServiceRef service_ref,
   } else {
     OLA_WARN << "Unknown DNSServiceRef " << service_ref;
   }
-
 }
 
 void BonjourDiscoveryAgent::RunThread() {
@@ -196,7 +162,7 @@ void BonjourDiscoveryAgent::TriggerScopeChange(ola::thread::Future<bool> *f) {
 
   bool ret = true;
 
-  if (m_watch_masters) {
+  if (m_master_callback.get()) {
     const string service_type = GenerateE133SubType(m_scope, MASTER_SERVICE);
     OLA_INFO << "Starting browse op " << service_type;
     DNSServiceErrorType error = DNSServiceBrowse(
@@ -300,21 +266,15 @@ void BonjourDiscoveryAgent::UpdateMaster(DNSServiceFlags flags,
 void BonjourDiscoveryAgent::MasterChanged(const BonjourResolver *resolver) {
   MasterEntry entry;
   resolver->GetMasterEntry(&entry);
-  OLA_INFO << "Service name is " << entry.service_name;
+  OLA_INFO << "Update for " << entry;
 
   MutexLocker lock(&m_mutex);
-  MasterCallbacks::iterator iter = m_master_callbacks.begin();
-  for (; iter != m_master_callbacks.end(); ++iter) {
-    (*iter)->Run(MASTER_ADDED, entry);
-  }
+  m_master_callback->Run(MASTER_ADDED, entry);
 }
 
 void BonjourDiscoveryAgent::RunMasterCallbacks(
     DiscoveryAgentInterface::MasterEvent event,
-    const MasterEntry &master_entry) {
-  MasterCallbacks::iterator iter = m_master_callbacks.begin();
-  for (; iter != m_master_callbacks.end(); ++iter) {
-    (*iter)->Run(event, master_entry);
-  }
+    const MasterEntry &entry) {
+  m_master_callback->Run(event, entry);
 }
 
