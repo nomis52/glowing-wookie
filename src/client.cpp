@@ -95,6 +95,8 @@ class Client {
   ola::network::AdvancedTCPConnector  m_connector;
   ola::ConstantBackoffPolicy m_backoff_policy;
 
+  IPV4SocketAddress m_reported_master;
+
   void MasterEvent(DiscoveryAgentInterface::MasterEvent event,
                    MasterEntry entry) {
     UpdateMasterList(event, entry);
@@ -111,16 +113,20 @@ class Client {
       }
     }
     if (preferred_master) {
-      OLA_INFO << "Would have picked " << preferred_master->name << " @ "
-               << preferred_master->address;
+      if (preferred_master->address != m_reported_master) {
+        OLA_INFO << "MASTER MISMATCH, picked " << preferred_master->address
+                 << ", but reported was " << m_reported_master;
+      }
     } else {
-      OLA_INFO << "No master found";
+      if (m_reported_master != IPV4SocketAddress()) {
+        OLA_INFO << "MASTER MISMATCH, failed to find master but reported was "
+                 << m_reported_master;
+      }
     }
   }
 
   void UpdateMasterList(DiscoveryAgentInterface::MasterEvent event,
                         const MasterEntry &entry) {
-    OLA_INFO << "Updating list with " << entry;
     vector<Master>::iterator iter = m_masters.begin();
     for (; iter != m_masters.end(); ++iter) {
       if (iter->name == entry.service_name) {
@@ -133,7 +139,7 @@ class Client {
             CloseConnectionToMaster(&*iter);
             iter->priority = entry.priority;
             iter->address = entry.address;
-            OpenConnectionToMaster(&m_masters.back());
+            OpenConnectionToMaster(&*iter);
           }
         }
         return;
@@ -155,7 +161,7 @@ class Client {
     if (master->address.Host() == IPV4Address::WildCard()) {
       return;
     }
-    OLA_INFO << "Would open connection to " << master->name << " "
+    OLA_INFO << "Opening connection to " << master->name << " "
              << master->address;
 
     m_connector.AddEndpoint(master->address, &m_backoff_policy);
@@ -213,7 +219,22 @@ class Client {
       OLA_INFO << "Failed to read from " << peer;
     }
 
-    OLA_INFO << "Socket to " << peer << " had data: " << ToHex(data);
+    switch (data) {
+      case 'b':
+        if (m_reported_master == peer) {
+          OLA_INFO << peer << " is no longer reporting as master";
+          m_reported_master = IPV4SocketAddress();
+        }
+        break;
+      case 'm':
+        if (m_reported_master != peer) {
+          OLA_INFO << peer << " stole mastership from " << m_reported_master;
+          m_reported_master = peer;
+        }
+        break;
+      default:
+        OLA_WARN << "Unknown status " << ToHex(data) << " from " << peer;
+    }
   }
 
   void SocketClosed(IPV4SocketAddress peer) {

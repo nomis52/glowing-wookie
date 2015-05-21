@@ -7,11 +7,15 @@
 #include <ola/base/SysExits.h>
 #include <ola/io/SelectServer.h>
 #include <ola/network/TCPSocket.h>
+#include <ola/network/InterfacePicker.h>
 #include <ola/network/TCPSocketFactory.h>
 #include <ola/strings/Format.h>
+#include <ola/stl/STLUtils.h>
 
 #include <memory>
 #include <vector>
+#include <set>
+#include <string>
 
 #include "DiscoveryAgent.h"
 #include "MasterEntry.h"
@@ -22,14 +26,18 @@ DEFINE_uint16(listen_port, 0, "The port to listen on");
 DEFINE_string(scope, "default", "The scope to use.");
 DEFINE_default_bool(watch_masters, true, "Watch for master changes");
 
-using ola::NewCallback;
-using ola::NewSingleCallback;
 using ola::io::SelectServer;
+using ola::network::Interface;
+using ola::network::InterfacePicker;
 using ola::network::IPV4Address;
 using ola::network::IPV4SocketAddress;
 using ola::network::TCPSocket;
+using ola::NewCallback;
+using ola::NewSingleCallback;
+using ola::STLContains;
 using ola::strings::ToHex;
 using std::auto_ptr;
+using std::set;
 using std::vector;
 
 class Server {
@@ -63,6 +71,13 @@ class Server {
   }
 
   bool Init() {
+    auto_ptr<InterfacePicker> picker(InterfacePicker::NewPicker());
+    vector<Interface> interfaces = picker->GetInterfaces(false);
+    vector<Interface>::const_iterator iter = interfaces.begin();
+    for (; iter != interfaces.end(); ++iter) {
+      m_local_ips.insert(iter->ip_address);
+    }
+
     // Start the agent.
     DiscoveryAgentFactory factory;
     DiscoveryAgentInterface::Options options;
@@ -82,18 +97,19 @@ class Server {
       return false;
     }
 
-    ola::network::GenericSocketAddress actual_adress =
+    ola::network::GenericSocketAddress actual_address =
         m_listen_socket.GetLocalAddress();
-    if (actual_adress.Family() != AF_INET) {
+    if (actual_address.Family() != AF_INET) {
       OLA_WARN << "Invalid socket family";
       return false;
     }
-    OLA_INFO << "Listening on " << actual_adress;
+    OLA_INFO << "Listening on " << actual_address;
+    m_listen_address = actual_address.V4Addr();
 
     // Register as a master
     MasterEntry master_entry;
     master_entry.service_name = "Master";
-    master_entry.address = actual_adress.V4Addr();
+    master_entry.address = m_listen_address;
     master_entry.priority = FLAGS_priority;
     master_entry.scope = FLAGS_scope.str();
     agent->RegisterMaster(master_entry);
@@ -112,22 +128,81 @@ class Server {
   }
 
  private:
+  struct Master {
+    std::string name;
+    ola::network::IPV4SocketAddress address;
+    uint8_t priority;
+  };
+
   SelectServer m_ss;
 
   IPV4Address m_listen_ip;
   ola::network::TCPSocketFactory m_tcp_socket_factory;
   ola::network::TCPAcceptingSocket m_listen_socket;
+  IPV4SocketAddress m_listen_address;
   auto_ptr<DiscoveryAgentInterface> m_discovery_agent;
 
   vector<TCPSocket*> m_sockets;
+  set<IPV4Address> m_local_ips;
   bool m_is_master;
   ola::thread::timeout_id m_update_timeout;
+  std::vector<Master> m_masters;
 
   void MasterChanged(DiscoveryAgentInterface::MasterEvent event,
                      const MasterEntry &entry) {
     OLA_INFO << "Got event "
              << (event == DiscoveryAgentInterface::MASTER_ADDED ?
                  "Add / Update" : "Remove") << entry;
+    UpdateMasterList(event, entry);
+    bool am_master = CheckIfMaster();
+    if (am_master != m_is_master) {
+      if (am_master) {
+        OLA_INFO << "I'm now the master!";
+      } else {
+        OLA_INFO << "I'm no longer the master!";
+      }
+      m_is_master = am_master;
+    }
+  }
+
+  void UpdateMasterList(DiscoveryAgentInterface::MasterEvent event,
+                        const MasterEntry &entry) {
+    vector<Master>::iterator iter = m_masters.begin();
+    for (; iter != m_masters.end(); ++iter) {
+      if (iter->name == entry.service_name) {
+        if (event == DiscoveryAgentInterface::MASTER_REMOVED) {
+          iter = m_masters.erase(iter);
+        } else {
+          iter->priority = entry.priority;
+          iter->address = entry.address;
+        }
+        return;
+      }
+    }
+    // not in the list.
+    Master master = {
+      entry.service_name,
+      entry.address,
+      entry.priority,
+    };
+    m_masters.push_back(master);
+    OLA_INFO << "Added new master";
+  }
+
+  bool CheckIfMaster() {
+    vector<Master>::iterator iter = m_masters.begin();
+    uint8_t priority = 0;
+    Master *preferred_master = NULL;
+    for (; iter != m_masters.end(); ++iter) {
+      if (iter->priority > priority &&
+          iter->address.Host() != IPV4Address::WildCard()) {
+        preferred_master = &(*iter);
+        priority = iter->priority;
+      }
+    }
+    return (preferred_master &&
+            preferred_master->address.Port() == m_listen_address.Port() &&
+            STLContains(m_local_ips, preferred_master->address.Host()));
   }
 
   void OnTCPConnect(TCPSocket *socket) {

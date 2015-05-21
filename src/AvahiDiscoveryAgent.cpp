@@ -161,7 +161,6 @@ static void browse_callback(AvahiServiceBrowser *b,
   AvahiDiscoveryAgent *agent =
       reinterpret_cast<AvahiDiscoveryAgent*>(data);
 
-  OLA_INFO << "Browse event!";
   agent->BrowseEvent(interface, protocol, event, name, type, domain, flags);
   (void) b;
 }
@@ -181,7 +180,6 @@ static void resolve_callback(AvahiServiceResolver *r,
                              void *userdata) {
   MasterResolver *resolver =
     reinterpret_cast<MasterResolver*>(userdata);
-  OLA_INFO << "Resolve event!";
   resolver->ResolveEvent(event, a, port, txt);
 
   (void) r;
