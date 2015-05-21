@@ -161,6 +161,7 @@ static void browse_callback(AvahiServiceBrowser *b,
   AvahiDiscoveryAgent *agent =
       reinterpret_cast<AvahiDiscoveryAgent*>(data);
 
+  OLA_INFO << "Browse event!";
   agent->BrowseEvent(interface, protocol, event, name, type, domain, flags);
   (void) b;
 }
@@ -180,6 +181,7 @@ static void resolve_callback(AvahiServiceResolver *r,
                              void *userdata) {
   MasterResolver *resolver =
     reinterpret_cast<MasterResolver*>(userdata);
+  OLA_INFO << "Resolve event!";
   resolver->ResolveEvent(event, a, port, txt);
 
   (void) r;
@@ -645,10 +647,14 @@ void AvahiDiscoveryAgent::BrowseEvent(AvahiIfIndex interface,
       OLA_WARN << "(Browser) " << m_client->GetLastError();
       return;
     case AVAHI_BROWSER_NEW:
-      AddMaster(interface, protocol, name, type, domain);
+      if (protocol == AVAHI_PROTO_INET) {
+        AddMaster(interface, protocol, name, type, domain);
+      }
       break;
     case AVAHI_BROWSER_REMOVE:
-      RemoveMaster(interface, protocol, name, type, domain);
+      if (protocol == AVAHI_PROTO_INET) {
+        RemoveMaster(interface, protocol, name, type, domain);
+      }
       break;
     default:
       {}
@@ -728,9 +734,9 @@ void AvahiDiscoveryAgent::RemoveMaster(AvahiIfIndex interface,
                                        const std::string &domain) {
   MasterResolver master(NULL, m_client.get(), interface, protocol, name, type,
                         domain);
-  OLA_WARN << "Removing: " << master;
 
   MutexLocker lock(&m_masters_mu);
+  OLA_WARN << "Removing: " << master << " from list " << m_masters.size();
 
   MasterResolverList::iterator iter = m_masters.begin();
   for (; iter != m_masters.end(); ++iter) {
@@ -740,6 +746,7 @@ void AvahiDiscoveryAgent::RemoveMaster(AvahiIfIndex interface,
       m_master_callback->Run(MASTER_REMOVED, entry);
       delete *iter;
       m_masters.erase(iter);
+      OLA_INFO << "Size is now " << m_masters.size();
       return;
     }
   }

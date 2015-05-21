@@ -8,8 +8,10 @@
 #include <ola/io/SelectServer.h>
 #include <ola/network/TCPSocket.h>
 #include <ola/network/TCPSocketFactory.h>
+#include <ola/strings/Format.h>
 
 #include <memory>
+#include <vector>
 
 #include "DiscoveryAgent.h"
 #include "MasterEntry.h"
@@ -20,30 +22,164 @@ DEFINE_uint16(listen_port, 0, "The port to listen on");
 DEFINE_string(scope, "default", "The scope to use.");
 DEFINE_default_bool(watch_masters, true, "Watch for master changes");
 
+using ola::NewCallback;
+using ola::NewSingleCallback;
 using ola::io::SelectServer;
 using ola::network::IPV4Address;
 using ola::network::IPV4SocketAddress;
 using ola::network::TCPSocket;
+using ola::strings::ToHex;
+using std::auto_ptr;
+using std::vector;
 
-class SelectServer *g_ss = NULL;
+class Server {
+ public:
+  explicit Server(const IPV4Address &listen_ip)
+      : m_listen_ip(listen_ip),
+        m_tcp_socket_factory(
+            ola::NewCallback(this, &Server::OnTCPConnect)),
+        m_listen_socket(&m_tcp_socket_factory),
+        m_is_master(false),
+        m_update_timeout(ola::thread::INVALID_TIMEOUT) {
+    m_update_timeout = m_ss.RegisterRepeatingTimeout(
+        1000,
+        NewCallback(this, &Server::UpdateClients));
+  }
 
-void OnTCPConnect(TCPSocket *socket_ptr) {
-  // Just close the socket for now.
-  socket_ptr->Close();
-  delete socket_ptr;
-}
+  ~Server() {
+    if (m_update_timeout != ola::thread::INVALID_TIMEOUT) {
+      m_ss.RemoveTimeout(m_update_timeout);
+      m_update_timeout = ola::thread::INVALID_TIMEOUT;
+    }
+
+    m_ss.RemoveReadDescriptor(&m_listen_socket);
+
+    vector<TCPSocket*>::iterator iter = m_sockets.begin();
+    for (; iter != m_sockets.end(); ++iter) {
+      m_ss.RemoveReadDescriptor(*iter);
+      (*iter)->Close();
+      delete *iter;
+    }
+  }
+
+  bool Init() {
+    // Start the agent.
+    DiscoveryAgentFactory factory;
+    DiscoveryAgentInterface::Options options;
+    options.scope = FLAGS_scope.str();
+    if (FLAGS_watch_masters) {
+      options.master_callback = ola::NewCallback(this, &Server::MasterChanged);
+    }
+    auto_ptr<DiscoveryAgentInterface> agent(factory.New(options));
+
+    if (!agent->Start()) {
+      return false;
+    }
+
+    const IPV4SocketAddress listen_address(m_listen_ip, FLAGS_listen_port);
+    OLA_INFO << listen_address;
+    if (!m_listen_socket.Listen(listen_address, 10)) {
+      return false;
+    }
+
+    ola::network::GenericSocketAddress actual_adress =
+        m_listen_socket.GetLocalAddress();
+    if (actual_adress.Family() != AF_INET) {
+      OLA_WARN << "Invalid socket family";
+      return false;
+    }
+    OLA_INFO << "Listening on " << actual_adress;
+
+    // Register as a master
+    MasterEntry master_entry;
+    master_entry.service_name = "Master";
+    master_entry.address = actual_adress.V4Addr();
+    master_entry.priority = FLAGS_priority;
+    master_entry.scope = FLAGS_scope.str();
+    agent->RegisterMaster(master_entry);
+
+    m_ss.AddReadDescriptor(&m_listen_socket);
+    m_discovery_agent.reset(agent.release());
+    return true;
+  }
+
+  void Terminate() {
+    m_ss.Terminate();
+  }
+
+  void Run() {
+    m_ss.Run();
+  }
+
+ private:
+  SelectServer m_ss;
+
+  IPV4Address m_listen_ip;
+  ola::network::TCPSocketFactory m_tcp_socket_factory;
+  ola::network::TCPAcceptingSocket m_listen_socket;
+  auto_ptr<DiscoveryAgentInterface> m_discovery_agent;
+
+  vector<TCPSocket*> m_sockets;
+  bool m_is_master;
+  ola::thread::timeout_id m_update_timeout;
+
+  void MasterChanged(DiscoveryAgentInterface::MasterEvent event,
+                     const MasterEntry &entry) {
+    OLA_INFO << "Got event "
+             << (event == DiscoveryAgentInterface::MASTER_ADDED ?
+                 "Add / Update" : "Remove") << entry;
+  }
+
+  void OnTCPConnect(TCPSocket *socket) {
+    OLA_INFO << "New connection: " << socket;
+    socket->SetOnData(
+        NewCallback(this, &Server::ReceiveTCPData, socket));
+    socket->SetOnClose(
+        NewSingleCallback(this, &Server::SocketClosed, socket));
+    m_ss.AddReadDescriptor(socket);
+    m_sockets.push_back(socket);
+  }
+
+  void ReceiveTCPData(TCPSocket *socket) {
+    uint8_t data;
+    unsigned int length;
+    if (socket->Receive(&data, sizeof(data), length)) {
+      OLA_INFO << "Failed to read";
+    }
+    OLA_INFO << "Socket had data: " << ToHex(data);
+  }
+
+  void SocketClosed(TCPSocket *socket) {
+    OLA_INFO << "Socket @ " << socket << " was closed";
+    vector<TCPSocket*>::iterator iter = m_sockets.begin();
+    for (; iter != m_sockets.end(); ++iter) {
+      if (*iter == socket) {
+        m_ss.RemoveReadDescriptor(socket);
+        socket->Close();
+        delete socket;
+        m_sockets.erase(iter);
+        break;
+      }
+    }
+  }
+
+  bool UpdateClients() {
+    uint8_t data = m_is_master ? 'm' : 'b';
+    vector<TCPSocket*>::iterator iter = m_sockets.begin();
+    for (; iter != m_sockets.end(); ++iter) {
+      OLA_INFO << "Sending...";
+      (*iter)->Send(&data, sizeof(data));
+    }
+    return true;
+  }
+};
+
+Server *g_server = NULL;
 
 static void InteruptSignal(OLA_UNUSED int signal) {
-  if (g_ss) {
-    g_ss->Terminate();
+  if (g_server) {
+    g_server->Terminate();
   }
-}
-
-void MasterChanged(DiscoveryAgentInterface::MasterEvent event,
-                   const MasterEntry &entry) {
-  OLA_INFO << "Got event "
-           << (event == DiscoveryAgentInterface::MASTER_ADDED ?
-               "Add / Update" : "Remove") << entry;
 }
 
 int main(int argc, char *argv[]) {
@@ -56,49 +192,15 @@ int main(int argc, char *argv[]) {
     exit(ola::EXIT_USAGE);
   }
 
-  // Start the agent.
-  DiscoveryAgentFactory factory;
-  DiscoveryAgentInterface::Options options;
-  options.scope = FLAGS_scope.str();
-  if (FLAGS_watch_masters) {
-    options.master_callback = ola::NewCallback(MasterChanged);
-  }
-  std::auto_ptr<DiscoveryAgentInterface> agent(factory.New(options));
 
-  if (!agent->Start()) {
+
+  Server server(master_ip);
+  if (!server.Init()) {
     exit(ola::EXIT_UNAVAILABLE);
   }
 
-  // Setup TCP
-  ola::network::TCPSocketFactory tcp_socket_factory(
-      ola::NewCallback(OnTCPConnect));
-  ola::network::TCPAcceptingSocket listen_socket(&tcp_socket_factory);
-
-  const IPV4SocketAddress listen_address(master_ip, FLAGS_listen_port);
-  if (!listen_socket.Listen(listen_address, 10)) {
-    return false;
-  }
-  ola::network::GenericSocketAddress actual_adress =
-    listen_socket.GetLocalAddress();
-  if (actual_adress.Family() != AF_INET) {
-    OLA_WARN << "Invalid socket family";
-    exit(ola::EXIT_UNAVAILABLE);
-  }
-  OLA_INFO << "Listening on " << actual_adress;
-
-  // Register as a master
-  MasterEntry master_entry;
-  master_entry.service_name = "Master";
-  master_entry.address = actual_adress.V4Addr();
-  master_entry.priority = FLAGS_priority;
-  master_entry.scope = FLAGS_scope.str();
-  agent->RegisterMaster(master_entry);
-
-  SelectServer ss;
-  g_ss = &ss;
+  g_server = &server;
   ola::InstallSignal(SIGINT, InteruptSignal);
-
-  ss.AddReadDescriptor(&listen_socket);
-  ss.Run();
-  ss.RemoveReadDescriptor(&listen_socket);
+  server.Run();
+  g_server = NULL;
 }
