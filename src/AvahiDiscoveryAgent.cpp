@@ -744,7 +744,6 @@ void AvahiDiscoveryAgent::RemoveMaster(AvahiIfIndex interface,
       m_master_callback->Run(MASTER_REMOVED, entry);
       delete *iter;
       m_masters.erase(iter);
-      OLA_INFO << "Size is now " << m_masters.size();
       return;
     }
   }

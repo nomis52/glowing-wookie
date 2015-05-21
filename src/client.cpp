@@ -7,6 +7,7 @@
 #include <ola/base/Init.h>
 #include <ola/base/SysExits.h>
 #include <ola/io/SelectServer.h>
+#include <ola/io/StdinHandler.h>
 #include <ola/network/AdvancedTCPConnector.h>
 #include <ola/network/TCPSocketFactory.h>
 #include <ola/strings/Format.h>
@@ -28,6 +29,7 @@ DEFINE_uint16(tcp_retry_interval, 5,
 using ola::NewCallback;
 using ola::NewSingleCallback;
 using ola::io::SelectServer;
+using ola::io::StdinHandler;
 using ola::network::IPV4Address;
 using ola::network::GenericSocketAddress;
 using ola::network::IPV4SocketAddress;
@@ -35,13 +37,26 @@ using ola::network::TCPSocket;
 using ola::strings::ToHex;
 using ola::TimeInterval;
 using std::auto_ptr;
-using std::vector;
+using std::cout;
+using std::endl;
 using std::set;
+using std::vector;
+
+ola::TimeStamp GetTime() {
+  ola::Clock clock;
+  ola::TimeStamp now;
+  clock.CurrentTime(&now);
+  return now;
+}
+
+#define LOG_INFO OLA_INFO << GetTime() << " : "
 
 class Client {
  public:
   Client()
-      : m_tcp_socket_factory(NewCallback(this, &Client::OnTCPConnect)),
+      : m_stdin_handler(&m_ss,
+                        ola::NewCallback(this, &Client::Input)),
+        m_tcp_socket_factory(NewCallback(this, &Client::OnTCPConnect)),
         m_connector(&m_ss, &m_tcp_socket_factory,
                     TimeInterval(FLAGS_tcp_connect_timeout, 0)),
         m_backoff_policy(TimeInterval(FLAGS_tcp_retry_interval, 0)) {
@@ -78,6 +93,25 @@ class Client {
                  event, entry));
   }
 
+  void Input(int c) {
+    switch (c) {
+      case 'h':
+        ShowHelp();
+        break;
+      case 'm':
+        DumpMasterState();
+        break;
+      case 't':
+        cout << "Time: " << GetTime() << endl;
+        break;
+      case 'q':
+        m_ss.Terminate();
+        break;
+      default:
+        break;
+    }
+  }
+
  private:
   struct Master {
     std::string name;
@@ -88,6 +122,7 @@ class Client {
 
   std::vector<Master> m_masters;
   ola::io::SelectServer m_ss;
+  ola::io::StdinHandler m_stdin_handler;
 
   // Accessed by the discovery thread.
   std::auto_ptr<DiscoveryAgentInterface> m_discovery_agent;
@@ -100,7 +135,6 @@ class Client {
   void MasterEvent(DiscoveryAgentInterface::MasterEvent event,
                    MasterEntry entry) {
     UpdateMasterList(event, entry);
-    OLA_INFO << "Have " << m_masters.size() << " masters";
 
     uint8_t priority = 0;
     Master *preferred_master = NULL;
@@ -114,12 +148,12 @@ class Client {
     }
     if (preferred_master) {
       if (preferred_master->address != m_reported_master) {
-        OLA_INFO << "MASTER MISMATCH, picked " << preferred_master->address
+        LOG_INFO << "MASTER MISMATCH, picked " << preferred_master->address
                  << ", but reported was " << m_reported_master;
       }
     } else {
       if (m_reported_master != IPV4SocketAddress()) {
-        OLA_INFO << "MASTER MISMATCH, failed to find master but reported was "
+        LOG_INFO << "MASTER MISMATCH, failed to find master but reported was "
                  << m_reported_master;
       }
     }
@@ -153,7 +187,6 @@ class Client {
       NULL,
     };
     m_masters.push_back(master);
-    OLA_INFO << "Added new master";
     OpenConnectionToMaster(&m_masters.back());
   }
 
@@ -171,8 +204,18 @@ class Client {
     if (master->address.Host() == IPV4Address::WildCard()) {
       return;
     }
-    OLA_INFO << "Would close connection to " << master->name << " "
+    OLA_INFO << "Close connection to " << master->name << " "
              << master->address;
+    if (master->socket) {
+      m_ss.AddReadDescriptor(master->socket);
+      master->socket->Close();
+      delete master->socket;
+    }
+
+    if (master->address != IPV4SocketAddress()) {
+      m_connector.Disconnect(master->address, true);
+      m_connector.RemoveEndpoint(master->address);
+    }
   }
 
   void OnTCPConnect(TCPSocket *socket) {
@@ -228,7 +271,7 @@ class Client {
         break;
       case 'm':
         if (m_reported_master != peer) {
-          OLA_INFO << peer << " stole mastership from " << m_reported_master;
+          LOG_INFO << peer << " stole mastership from " << m_reported_master;
           m_reported_master = peer;
         }
         break;
@@ -248,6 +291,28 @@ class Client {
         m_connector.Disconnect(peer);
       }
     }
+  }
+
+  void DumpMasterState() {
+    vector<Master>::iterator iter = m_masters.begin();
+    cout << "--------------" << endl;
+    for (; iter != m_masters.end(); ++iter) {
+      cout << iter->name << " @ " << iter->address << ", priority "
+           << static_cast<int>(iter->priority) << ", "
+           << (iter->socket ? "connected" : " disconnected")
+           << endl;
+    }
+    cout << "Reported Master is " << m_reported_master << endl;
+    cout << "--------------" << endl;
+  }
+
+  void ShowHelp() {
+    cout << "--------------" << endl;
+    cout << "h - Show Help" << endl;
+    cout << "m - Dump Master State" << endl;
+    cout << "t - Print timestamp" << endl;
+    cout << "q - Quit" << endl;
+    cout << "--------------" << endl;
   }
 };
 
