@@ -16,7 +16,8 @@ src_libdnssd_la_SOURCES = \
     src/DiscoveryAgent.h \
     src/MasterEntry.cpp \
     src/MasterEntry.h
-src_libdnssd_la_LIBADD =
+src_libdnssd_la_CXXFLAGS = $(OLA_CFLAGS)
+src_libdnssd_la_LIBADD = $(OLA_LIBS)
 
 if HAVE_DNSSD
 src_libdnssd_la_SOURCES += \
@@ -51,7 +52,7 @@ noinst_PROGRAMS = src/main src/client
 src_client_SOURCES = src/client.cpp
 src_client_CXXFLAGS = $(OLA_CFLAGS)
 src_client_LDADD = $(OLA_LIBS) \
-                 src/libdnssd.la
+                   src/libdnssd.la
 
 src_main_SOURCES = src/main.cpp
 src_main_CXXFLAGS = $(OLA_CFLAGS)
