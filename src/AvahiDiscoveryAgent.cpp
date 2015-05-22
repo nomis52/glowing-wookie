@@ -274,8 +274,12 @@ void MasterResolver::ResolveEvent(AvahiResolverEvent event,
                                   uint16_t port,
                                   AvahiStringList *txt) {
   if (event == AVAHI_RESOLVER_FAILURE) {
+    m_resolved_address = IPV4SocketAddress();
     OLA_WARN << "Failed to resolve " << m_service_name << "." << m_type
              << ", proto: " << ProtoToString(m_protocol);
+    if (m_callback.get()) {
+      m_callback->Run(this);
+    }
     return;
   }
 
